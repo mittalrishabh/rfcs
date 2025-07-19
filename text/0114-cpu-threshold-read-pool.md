@@ -72,7 +72,7 @@ adjust_pool_size() {
 On Cloud, EBS env It is 10 cores machine
 1. min_thread is 20
 2. max_thread is 10 * 5 = 50
-3. CPUTHreshold is 80%
+3. CPUThreshold is 80%
 4. current active thread count is 20
 
 We will scale down the thread until cpu utilization of unified read pool reaches less than 8.8 cores. We will start doing scale up if CPU utilization is less than 7.2 cores and number of threads is less then 20.
