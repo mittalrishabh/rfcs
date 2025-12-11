@@ -316,3 +316,9 @@ enable-region-tracking = true
 ## Drawbacks
 
 1. **Temporary traffic moderation**: The VT-based traffic moderation is temporary. It works until: (a) periodic VT normalization equalizes VTs across regions (typically minutes), or (b) node reboot resets all VTs. After normalization, previously hot regions return to normal priority even if still hot. This provides short-term relief during overload but not long-term rate limiting.
+
+2. **Shared region fairness issues**: When multiple resource groups access the same region, two fairness problems arise:
+   - **Innocent tenant penalized**: Tenant A's heavy usage increases the region's VT, penalizing Tenant B's requests to that region even though Tenant B didn't cause the hotness
+   - **Hot region stays hot**: If Tenant A and B alternate requests to a shared region, each tenant's group_vt stays low (they're taking turns), so the region never gets properly deprioritized despite being continuously hot
+
+   This can be mitigated by ensuring resource groups don't share tables. regions are generally created at the table boundary if it is big enough. 
