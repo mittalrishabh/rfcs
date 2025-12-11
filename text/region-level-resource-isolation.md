@@ -2,22 +2,22 @@
 
 ## Summary
 
-This RFC proposes enhancements to TiKV's resource control system to provide region-level isolation, preventing hot regions from overwhelming tenant resources. The design extends the existing resource group-based priority system with region-level RU (Resource Unit) tracking and introduces traffic moderation mechanisms.
+This RFC proposes enhancements to TiKV's resource control to provide region-level isolation, preventing hot regions from overwhelming tenant resources. The design extends the existing resource group-based priority system with region-level RU (Resource Unit) tracking and introduces traffic moderation mechanisms.
 
 ## Motivation
 
 ### Current State
 
 TiKV implements resource control at the **resource group level**:
-- Resource groups represent tenants and track RU (Request Unit) consumption
-- Each resource group has a `group_priority` (LOW, MEDIUM, HIGH) configured in PD
-- The `ResourceController` maintains virtual time (VT) per resource group for fairness. VT increases as a group consumes resources - groups with higher VT have consumed more and get lower scheduling priority
-- The DM (Deadline Multilevel) queue orders tasks by priority: `concat_priority_vt(group_priority, resource_group_virtual_time)`. Lower values are scheduled first, so high-priority groups with low VT run first
+- Resource groups represent tenants and track RU (Resource Unit) consumption
+- Each resource group has a `group_priority` (LOW, MEDIUM, HIGH) configured 
+- The `ResourceController` uses mClock algorithm to prioritize the requests. It maintains virtual time (VT) per resource group for fairness. VT increases as a group consumes resources - groups with higher VT have consumed more and get lower scheduling priority
+- Tasks are ordered by priority: `concat_priority_vt(group_priority, resource_group_virtual_time)`. Lower values are scheduled first, so high-priority groups with low VT run first
 - VT is periodically normalized to prevent starvation: lagging groups (low VT) are pulled toward the leader (highest VT), and all VTs are reset when nearing overflow
-- The unified read pool uses yatp's priority queue which implements this DM queue using a SkipMap
+- The unified read pool uses yatp's priority queue (implemented with a SkipMap)
 
 ## Goals
-These functionalities are missing in the current state. 
+These functionalities are missing in the current implementation. 
 
 1. **Region-level fairness**: Hot regions (with hot keys or large scans) should be deprioritized to prevent resource monopolization within a tenant
 3. **Traffic Moderation**: In a multi-tenant SOA environment, setting correct rate limits is challenging - limits that are too tight reject valid traffic, while limits that are too loose allow overload. Instead of hard rate limits, implement adaptive traffic moderation that responds to sudden spikes on hot regions by gracefully deprioritizing rather than outright rejecting requests
@@ -314,4 +314,5 @@ enable-region-tracking = true
 ```
 
 ## Drawbacks
-1. Currently, split/scatter is non-deterministic when node is overloaded - it depends on how many requests on this region are succeeded. With this design, hot regions are deliberately deprioritized, so split/scatter may take longer when overloaded. This is an acceptable tradeoff for better traffic moderation
+
+1. **Temporary traffic moderation**: The VT-based traffic moderation is temporary. It works until: (a) periodic VT normalization equalizes VTs across regions (typically minutes), or (b) node reboot resets all VTs. After normalization, previously hot regions return to normal priority even if still hot. This provides short-term relief during overload but not long-term rate limiting.
