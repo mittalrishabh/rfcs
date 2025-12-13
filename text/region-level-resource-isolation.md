@@ -64,13 +64,35 @@ struct TaskPriority {
 - Pull lagging entities toward leader (prevent starvation)
 - Reset all VTs if near overflow
 
-### Traffic moderation and split/scatter 
+### Traffic moderation and split/scatter
 
-Currently, split/scatter is non-deterministic when node is overloaded - it depends on how many requests on this region are succeeded. With this design, Hot regions accumulate high VT and get deprioritized, which slows down split decisions based on served QPS. When the region eventually splits, the new regions can either:
-1. **Inherit parent VT** (recommended): New regions start with the same high VT as parent, maintaining deprioritization until they cool down naturally via normalization
-2. **Reset to zero VT**: New regions start fresh, immediately getting normal priority
+Currently, split/scatter is non-deterministic when node is overloaded - it depends on how many requests on this region are succeeded. With this design, Hot regions accumulate high VT and get deprioritized, which slows down split decisions based on served QPS.
 
-Option 1 combined with delayed splitting provides stronger traffic moderation - the system temporarily reduces throughput to the hot table/region until the load naturally subsides or spreads across the split regions
+#### VT Handling for Split Regions
+
+When a region splits, the VT behavior depends on CPU utilization:
+
+**When CPU utilization > 80% (system overloaded)**:
+- Split regions share a **common VT** inherited from the parent region
+- Both child regions contribute to and read from the same VT tracker
+- This maintains strong traffic moderation - even after splitting, the hot key/region group remains deprioritized as a unit
+- The common VT continues accumulating based on combined traffic to both regions
+- This prevents the split from immediately bypassing the backpressure that delayed the split in the first place
+
+**When CPU utilization drops < 80% (system has capacity)**:
+- Split regions transition to **independent VTs**
+- Each region gets its own VT tracker, initialized to the common VT value at time of transition
+- From this point forward, each region accumulates VT based on its own traffic patterns
+- This allows natural load balancing - if traffic shifts to one split region, only that region gets deprioritized
+
+**Implementation**:
+- Track CPU utilization as a rolling average (e.g., last 10 seconds)
+- On region split, create a `RegionGroup` if CPU > 80%, linking child regions to shared VT
+- Periodically check CPU utilization (every 1-5 seconds)
+- When CPU drops < 80%, dissolve region groups and transition to independent VTs
+- Store region group membership in `RegionVtTracker` with atomic reference to shared VT state
+
+This adaptive approach provides stronger traffic moderation when the system is overloaded (maintaining backpressure across splits), while allowing normal load balancing when the system has capacity
 
 ### Background Task Demotion
 
@@ -149,17 +171,38 @@ Create new component for region-level tracking:
 
 struct RegionResourceTracker {
     region_vts: DashMap<u64, RegionVtTracker>,
+    cpu_utilization: AtomicU64,  // Rolling average, encoded as u64
 }
 
 struct RegionVtTracker {
     virtual_time: AtomicU64,
     vt_delta_for_get: AtomicU64,
+    parent_vt: Option<Arc<AtomicU64>>,  // Shared parent VT if CPU > 80% at split
 }
 
 impl RegionResourceTracker {
     fn get_and_increment_vt(region_id) -> u64 {
+        // If parent_vt exists, use shared parent VT
+        // Otherwise use independent VT
         // Similar to ResourceGroup::get_priority()
-        // Returns current VT and increments by vt_delta
+    }
+
+    fn on_region_split(parent_id, child1_id, child2_id) {
+        // Get parent VT value
+        // If cpu_utilization > 80%:
+        //   Create Arc<AtomicU64> with parent VT
+        //   Both children share reference to parent_vt
+        // Else:
+        //   Both children get independent VT initialized to parent VT
+        //   parent_vt = None
+        // Remove parent tracker
+    }
+
+    fn check_and_transition_to_independent() {
+        // If cpu_utilization < 80%:
+        //   For each region with parent_vt:
+        //     Copy parent_vt value to virtual_time
+        //     Set parent_vt to None
     }
 
     fn update_vt_deltas() {
@@ -176,6 +219,20 @@ impl RegionResourceTracker {
     fn consume(region_id, cpu_time, keys, bytes) {
         // Update EMA metrics
         // Increment VT based on actual consumption
+        // If parent_vt exists, increment shared parent VT
+        // Otherwise increment independent VT
+    }
+
+    fn update_cpu_utilization(cpu_util) {
+        // Update rolling average (EMA over ~10 seconds)
+    }
+
+    fn cleanup_inactive_regions() {
+        // Periodically remove regions with no recent VT updates
+        // For each region:
+        //   If virtual_time hasn't changed in last N seconds:
+        //     Remove from region_vts hashmap
+        // This reduces memory usage for cold/deleted regions
     }
 }
 ```
@@ -315,8 +372,7 @@ enable-region-tracking = true
 
 ## Drawbacks
 
-1. **Temporary traffic moderation**: The VT-based traffic moderation is temporary. It works until: (a) periodic VT normalization equalizes VTs across regions (typically minutes), or (b) node reboot resets all VTs. After normalization, previously hot regions return to normal priority even if still hot. This provides short-term relief during overload but not long-term rate limiting.
-
+1. **Temporary traffic moderation**: The VT-based traffic moderation is temporary. It does not work if a node is rebooted after regions are split.
 2. **Shared region fairness issues**: When multiple resource groups access the same region, two fairness problems arise:
    - **Innocent tenant penalized**: Tenant A's heavy usage increases the region's VT, penalizing Tenant B's requests to that region even though Tenant B didn't cause the hotness
    - **Hot region stays hot**: If Tenant A and B alternate requests to a shared region, each tenant's group_vt stays low (they're taking turns), so the region never gets properly deprioritized despite being continuously hot
