@@ -20,7 +20,7 @@ TiKV implements resource control at the **resource group level**:
 These functionalities are missing in the current implementation. 
 
 1. **Region-level fairness**: Hot regions (with hot keys or large scans) should be deprioritized to prevent resource monopolization within a tenant
-3. **Traffic Moderation**: In a multi-tenant SOA environment, setting correct rate limits is challenging - limits that are too tight reject valid traffic, while limits that are too loose allow overload. Instead of hard rate limits, implement adaptive traffic moderation that responds to sudden spikes on hot regions by gracefully deprioritizing rather than outright rejecting requests
+3. **Traffic Moderation**: In a multi-tenant SOA environment, setting correct rate limits is challenging - limits that are too tight reject valid traffic, while limits that are too loose allow overload. Instead of hard rate limits, implement adaptive traffic moderation that responds to sudden spikes on hot regions by gracefully deprioritizing rather than overloading the system and impact other regions.
 4. **Queue Fairness**: Ensure the unified read pool queue maintains fairness across tenants/regions/background traffic. In the existing system any one tenant or background traffic can consume the entire queue. 
 
 ## Design
