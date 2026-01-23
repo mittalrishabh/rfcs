@@ -33,12 +33,12 @@ TiKV implements resource control at the **resource group level**:
 
 ```
 Steady state:
-- Tenant_1: consuming 100 RU/s (sustained workload)
-- Tenant_2: consuming 200 RU/s (sustained workload)
+- Tenant_1: consuming 10000 RU/s (sustained workload)
+- Tenant_2: consuming 20000 RU/s (sustained workload)
 - System: stable
 
 Sudden spike:
-- Tenant_3: traffic suddenly increases, overloading the system
+- Tenant_3: traffic suddenly increases to 5000, overloading the system
 
 Expected:
 - Throttle Tenant_3 (the new traffic causing overload)
