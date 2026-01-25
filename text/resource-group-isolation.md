@@ -16,7 +16,8 @@ This will be implemented for read traffic first. Write traffic will continue usi
 
 TiKV implements resource control at the **resource group level**:
 - Resource groups represent tenants and track RU (Resource Unit) consumption
-- Each resource group has a `group_priority` (LOW, MEDIUM, HIGH)
+- Users can define a quota while creating a resource group. Tenants with higher quotas are allocated proportionally more resources in TIKV 
+- Each resource group also has a `group_priority` (LOW, MEDIUM, HIGH)
 - The `ResourceController` uses mClock algorithm with virtual time (VT) per resource group
 - VT is incremented proportional to the resources consumed
 - Each resource group has a weight derived from proportional quota (`max_quota / tenant_quota`), where quota is the RU_PER_SEC defined when creating the resource group; VT increments are multiplied by this weight factor
@@ -24,7 +25,7 @@ TiKV implements resource control at the **resource group level**:
 
 ## Problems
 
-1. For use cases where 90% of traffic is of the same priority, scheduling should not be based on static RUs configured in resource control groups. Instead, it should protect the system by depriortizating the traffic causing the overload.  
+1. Customers typically don't know their RU usage in advance, so quotas are often over-provisioned to avoid throttling. As a result, scheduling based on static quota allocation fails to throttle the traffic actually causing system overload.    
 2. The current approach increments VT by `consumed * weight`, where weight is derived from RU quota. This doesn't work because tenants with small QPS can still exceed their proportional quota without being throttled—their VT increment remains small, so they continue to be served even when causing overload. 
 
 ### Problem Scenario
